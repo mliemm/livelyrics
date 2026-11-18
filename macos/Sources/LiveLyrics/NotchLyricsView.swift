@@ -11,11 +11,15 @@ final class NotchState: ObservableObject {
 /// A black bar hanging from the notch with the previous, current and next line.
 /// The menu bar icon opens the full popup in place, with the playback controls.
 struct NotchLyricsView: View {
-    static let collapsedSize = NSSize(width: 440, height: 74)
+    static func collapsedSize(atBottom: Bool) -> NSSize {
+        atBottom ? NSSize(width: 320, height: 66) : NSSize(width: 440, height: 74)
+    }
     static let expandedSize = NSSize(width: 440, height: 280)
 
     @ObservedObject var model: LyricsViewModel
     @ObservedObject var state: NotchState
+    /// The small form: a bar in a bottom corner, rounded on every side.
+    var atBottom = false
     var onCollapse: @MainActor () -> Void
     var onTogglePlacement: @MainActor () -> Void
     @State private var collapseTask: Task<Void, Never>?
@@ -42,9 +46,9 @@ struct NotchLyricsView: View {
             }
         }
         // Round only the bottom corners: the top edge meets the menu bar under the notch.
-        .padding(.top, 18)
+        .padding(.top, atBottom ? 0 : 18)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .padding(.top, -18)
+        .padding(.top, atBottom ? 0 : -18)
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
     }

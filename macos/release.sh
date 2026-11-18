@@ -24,6 +24,7 @@ A corner popup that shows synced lyrics for the song playing in Spotify desktop.
 - Previous, play/pause and next controls that appear when you hover the popup
 - Resizable; it remembers its size and position
 - Can hang under the notch, showing three lines; clicks pass through it and the menu bar icon opens it
+- Right click the menu bar icon to put it at the bottom left or bottom right of the screen, as a small bar beside a centred Dock
 - Menu bar icon to show or hide it
 
 Install: unzip, move LiveLyrics.app to Applications and open it. The app is not notarized, so macOS blocks the first launch: open System Settings, Privacy & Security, and click Open Anyway. Allow Spotify access when asked.

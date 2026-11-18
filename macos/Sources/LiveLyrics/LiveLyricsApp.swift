@@ -10,6 +10,31 @@ struct LiveLyricsApp: App {
     }
 }
 
+/// Where the lyrics sit. The bottom corners use the free space beside a centred Dock.
+private enum Placement: String, CaseIterable {
+    case corner, notch, bottomLeft, bottomRight
+
+    static let key = "Placement"
+
+    var title: String {
+        switch self {
+        case .corner: "Top right corner"
+        case .notch: "Under the notch"
+        case .bottomLeft: "Bottom left"
+        case .bottomRight: "Bottom right"
+        }
+    }
+
+    var isBottom: Bool { self == .bottomLeft || self == .bottomRight }
+
+    /// Falls back to the old under-the-notch switch for installs that predate this setting.
+    static var stored: Placement {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: key), let value = Placement(rawValue: raw) { return value }
+        return defaults.bool(forKey: "ShowUnderNotch") ? .notch : .corner
+    }
+}
+
 /// Owns the menu bar icon and the corner panel. The panel also opens on launch
 /// and on relaunch, so the app stays reachable when macOS hides the icon.
 @MainActor
@@ -20,13 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var notchPanel: NSPanel?
     private let notchState = NotchState()
     private var pointerMonitor: Any?
-    private var showsInNotch = UserDefaults.standard.bool(forKey: AppDelegate.notchKey)
+    private var placement = Placement.stored
+    /// The notch and both bottom corners use the same black lyrics bar.
+    private var showsInNotch: Bool { placement != .corner }
     private var activePanel: NSPanel? { showsInNotch ? notchPanel : panel }
     private var controlsShown = false
     /// How far the panel moved up to fit the controls above the Dock.
     private var controlsShift: CGFloat = 0
     private static let frameName = "LyricsPanel"
-    private static let notchKey = "ShowUnderNotch"
+    private static let bottomMargin: CGFloat = 0
     private static let minimumSize = NSSize(width: 200, height: 80)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -100,11 +127,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
               let statusItem
         else { return togglePanel() }
         let menu = NSMenu()
+        for option in Placement.allCases {
+            let item = menu.addItem(withTitle: option.title, action: #selector(placementChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = option.rawValue
+            item.state = option == placement ? .on : .off
+        }
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit LiveLyrics", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         // Attached only for this click, so a plain click keeps calling the action.
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    @objc private func placementChosen(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let option = Placement(rawValue: raw) else { return }
+        setPlacement(option)
     }
 
     /// Under the notch the icon opens and closes the full popup; in the corner it shows and hides it.
@@ -126,8 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let hostingView = NSHostingView(rootView: NotchLyricsView(
                 model: model,
                 state: notchState,
+                atBottom: placement.isBottom,
                 onCollapse: { [weak self] in self?.setNotchExpanded(false) },
-                onTogglePlacement: { [weak self] in self?.setShowsInNotch(false) }
+                onTogglePlacement: { [weak self] in self?.setPlacement(.corner) }
             ))
             hostingView.sizingOptions = []
             panel.contentView = hostingView
@@ -139,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let hostingView = NSHostingView(rootView: LyricsPopoverView(
                 model: model,
                 onControlsVisibilityChange: { [weak self] shown in self?.setControlsShown(shown) },
-                onTogglePlacement: { [weak self] in self?.setShowsInNotch(true) }
+                onTogglePlacement: { [weak self] in self?.setPlacement(.notch) }
             ))
             // The panel's size comes from the user and the controls, never from the SwiftUI content.
             hostingView.sizingOptions = []
@@ -150,12 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.makeKey()
     }
 
-    private func setShowsInNotch(_ inNotch: Bool) {
+    private func setPlacement(_ option: Placement) {
         setControlsShown(false)
         // orderOut, not close, so the lyrics keep playing through the switch.
         activePanel?.orderOut(nil)
-        showsInNotch = inNotch
-        UserDefaults.standard.set(inNotch, forKey: Self.notchKey)
+        placement = option
+        UserDefaults.standard.set(option.rawValue, forKey: Placement.key)
         showPanel()
     }
 
@@ -180,10 +220,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// notch, or on the main screen when no screen has one.
     @objc private func placeNotchPanel() {
         guard let notchPanel,
-              let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+              let screen = (placement.isBottom ? NSScreen.main : NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main)
         else { return }
         let menuBarHeight = max(screen.safeAreaInsets.top, screen.frame.maxY - screen.visibleFrame.maxY)
-        let size = notchState.isExpanded ? NotchLyricsView.expandedSize : NotchLyricsView.collapsedSize
+        let size = notchState.isExpanded ? NotchLyricsView.expandedSize : NotchLyricsView.collapsedSize(atBottom: placement.isBottom)
+        if placement.isBottom {
+            // The very bottom, so the bar sits beside a centred Dock rather than above it.
+            let visible = screen.visibleFrame
+            notchPanel.setFrame(NSRect(
+                x: placement == .bottomLeft ? visible.minX + Self.bottomMargin : visible.maxX - size.width - Self.bottomMargin,
+                y: screen.frame.minY + Self.bottomMargin,
+                width: size.width,
+                height: size.height
+            ), display: true)
+            return
+        }
         notchPanel.setFrame(NSRect(
             x: screen.frame.midX - size.width / 2,
             y: screen.frame.maxY - menuBarHeight - size.height,
@@ -194,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeNotchPanel() -> NSPanel {
         let panel = KeyablePanel(
-            contentRect: NSRect(origin: .zero, size: NotchLyricsView.collapsedSize),
+            contentRect: NSRect(origin: .zero, size: NotchLyricsView.collapsedSize(atBottom: false)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
